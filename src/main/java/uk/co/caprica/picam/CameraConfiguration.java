@@ -44,6 +44,8 @@ public final class CameraConfiguration {
 
     private Integer height = DEFAULT_HEIGHT;
 
+    private Integer fps = 5;
+
     private Encoding encoding = PNG;
 
     private Integer quality;
@@ -99,6 +101,8 @@ public final class CameraConfiguration {
     private Integer v;
 
     private Integer captureTimeout = -1;
+
+    private boolean useStills = false;
 
     //    private Integer imageEffectsParameters;
 
@@ -402,4 +406,21 @@ public final class CameraConfiguration {
         return captureTimeout;
     }
 
+    public boolean useStills() {
+        return useStills;
+    }
+
+    public CameraConfiguration useStills(boolean useStills) {
+        this.useStills = useStills;
+        return this;
+    }
+
+    public Integer fps() {
+        return fps;
+    }
+
+    public CameraConfiguration fps(Integer fps) {
+        this.fps = fps;
+        return this;
+    }
 }

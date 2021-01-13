@@ -29,35 +29,38 @@ import uk.co.caprica.picam.bindings.internal.MMAL_PORT_T;
 
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static uk.co.caprica.picam.bindings.LibMmal.mmal_buffer_header_mem_lock;
 import static uk.co.caprica.picam.bindings.LibMmal.mmal_buffer_header_mem_unlock;
 import static uk.co.caprica.picam.bindings.LibMmal.mmal_buffer_header_release;
 import static uk.co.caprica.picam.bindings.LibMmal.mmal_port_send_buffer;
 import static uk.co.caprica.picam.bindings.LibMmal.mmal_queue_get;
-import static uk.co.caprica.picam.bindings.internal.MMAL_BUFFER_HEADER_FLAG.MMAL_BUFFER_HEADER_FLAG_FRAME_END;
-import static uk.co.caprica.picam.bindings.internal.MMAL_BUFFER_HEADER_FLAG.MMAL_BUFFER_HEADER_FLAG_TRANSMISSION_FAILED;
+import static uk.co.caprica.picam.bindings.internal.MMAL_BUFFER_HEADER_FLAG.*;
 import static uk.co.caprica.picam.bindings.internal.MMAL_STATUS_T.MMAL_SUCCESS;
 
 class EncoderBufferCallback implements MMAL_PORT_BH_CB_T {
 
     private final Logger logger = LoggerFactory.getLogger(EncoderBufferCallback.class);
 
-    private final Semaphore captureFinishedSemaphore = new Semaphore(0);
+    private Semaphore captureFinishedSemaphore;
 
     private final MMAL_POOL_T picturePool;
 
-    private PictureCaptureHandler pictureCaptureHandler;
+    private boolean frameStarted = true;
+
+    private AtomicReference<PictureCaptureHandler> pictureCaptureHandler = new AtomicReference();
 
     EncoderBufferCallback(MMAL_POOL_T picturePool) {
         this.picturePool = picturePool;
     }
 
     void setPictureCaptureHandler(PictureCaptureHandler pictureCaptureHandler) {
-        this.pictureCaptureHandler = pictureCaptureHandler;
+        this.pictureCaptureHandler.set(pictureCaptureHandler);
     }
 
     void waitForCaptureToFinish(int captureTimeout) throws InterruptedException, CaptureTimeoutException {
+        captureFinishedSemaphore = new Semaphore(0);
         if (captureTimeout >= 0) {
             boolean acquired = captureFinishedSemaphore.tryAcquire(captureTimeout, TimeUnit.MILLISECONDS);
             if (!acquired) {
@@ -87,23 +90,34 @@ class EncoderBufferCallback implements MMAL_PORT_BH_CB_T {
             int bufferLength = buffer.length;
             logger.debug("bufferLength={}", bufferLength);
 
-            if (bufferLength > 0) {
-                byte[] data = buffer.data.getByteArray(buffer.offset, bufferLength);
-                pictureCaptureHandler.pictureData(data);
-            }
-
             int flags = buffer.flags;
             logger.debug("flags={}", flags);
 
-            if ((flags & (MMAL_BUFFER_HEADER_FLAG_FRAME_END | MMAL_BUFFER_HEADER_FLAG_TRANSMISSION_FAILED)) != 0) {
-                finished = true;
+            if ( bufferLength > 0) {
+                byte[] data = buffer.data.getByteArray(buffer.offset, bufferLength);
+                PictureCaptureHandler handler = pictureCaptureHandler.get();
+                if (frameStarted) {
+                    if (handler != null) {
+                        handler.pictureData(data);
+                    } else {
+                        frameStarted = false;
+                    }
+                }
             }
-        }
-        catch (Exception e) {
+
+            if (frameStarted && (flags & (MMAL_BUFFER_HEADER_FLAG_FRAME_END | MMAL_BUFFER_HEADER_FLAG_TRANSMISSION_FAILED)) != 0) {
+                finished = true;
+                frameStarted = false;
+                logger.info("set finished = true");
+            } else
+            if ((flags & MMAL_BUFFER_HEADER_FLAG_FRAME_END ) != 0) {
+                frameStarted = pictureCaptureHandler.get() != null;
+                logger.trace("set frameStarted = {}", frameStarted);
+            }
+        } catch (Exception e) {
             logger.error("Error in callback handling picture data", e);
             finished = true;
-        }
-        finally {
+        } finally {
             // Whatever happened, unlock the native buffer
             mmal_buffer_header_mem_unlock(pBuffer);
         }

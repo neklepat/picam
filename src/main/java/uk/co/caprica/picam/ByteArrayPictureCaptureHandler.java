@@ -19,9 +19,14 @@
 
 package uk.co.caprica.picam;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.io.ByteArrayOutputStream;
 
 public class ByteArrayPictureCaptureHandler implements PictureCaptureHandler<byte[]> {
+
+    private final Logger logger = LoggerFactory.getLogger(ByteArrayPictureCaptureHandler.class);
 
     private final Integer initialSize;
 
@@ -37,20 +42,24 @@ public class ByteArrayPictureCaptureHandler implements PictureCaptureHandler<byt
 
     @Override
     public void begin() throws Exception {
+        logger.debug("Begin handler {}", this.hashCode());
         out = initialSize != null ? new ByteArrayOutputStream(initialSize) : new ByteArrayOutputStream();
     }
 
     @Override
     public void pictureData(byte[] data) throws Exception {
+        logger.debug("Writing picture data to {}", this.hashCode());
         out.write(data);
     }
 
     @Override
     public void end() throws Exception {
+        logger.debug("End handler {}", this.hashCode());
     }
 
     @Override
     public byte[] result() {
+        logger.debug("Return handler {} result", this.hashCode());
         return out.toByteArray();
     }
 
