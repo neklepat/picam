@@ -22,7 +22,7 @@ package uk.co.caprica.picam.app;
 import uk.co.caprica.picam.Camera;
 import uk.co.caprica.picam.CameraConfiguration;
 import uk.co.caprica.picam.CaptureFailedException;
-import uk.co.caprica.picam.FilePictureCaptureHandler;
+import uk.co.caprica.picam.handlers.FilePictureCaptureHandler;
 import uk.co.caprica.picam.enums.Encoding;
 
 import java.io.File;

@@ -27,49 +27,48 @@ import uk.co.caprica.picam.bindings.internal.MMAL_POOL_T;
 import uk.co.caprica.picam.bindings.internal.MMAL_PORT_BH_CB_T;
 import uk.co.caprica.picam.bindings.internal.MMAL_PORT_T;
 import uk.co.caprica.picam.handlers.PictureCaptureHandler;
+import uk.co.caprica.picam.handlers.VideoCaptureHandler;
 
+import java.io.ByteArrayOutputStream;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
-import static uk.co.caprica.picam.bindings.LibMmal.mmal_buffer_header_mem_lock;
-import static uk.co.caprica.picam.bindings.LibMmal.mmal_buffer_header_mem_unlock;
-import static uk.co.caprica.picam.bindings.LibMmal.mmal_buffer_header_release;
-import static uk.co.caprica.picam.bindings.LibMmal.mmal_port_send_buffer;
-import static uk.co.caprica.picam.bindings.LibMmal.mmal_queue_get;
-import static uk.co.caprica.picam.bindings.internal.MMAL_BUFFER_HEADER_FLAG.*;
+import static uk.co.caprica.picam.bindings.LibMmal.*;
+import static uk.co.caprica.picam.bindings.internal.MMAL_BUFFER_HEADER_FLAG.MMAL_BUFFER_HEADER_FLAG_FRAME_END;
+import static uk.co.caprica.picam.bindings.internal.MMAL_BUFFER_HEADER_FLAG.MMAL_BUFFER_HEADER_FLAG_TRANSMISSION_FAILED;
 import static uk.co.caprica.picam.bindings.internal.MMAL_STATUS_T.MMAL_SUCCESS;
 
-class EncoderBufferCallback implements MMAL_PORT_BH_CB_T {
+class EncoderVideoBufferCallback implements MMAL_PORT_BH_CB_T {
 
-    private final Logger logger = LoggerFactory.getLogger(EncoderBufferCallback.class);
-
-    private Semaphore captureFinishedSemaphore;
+    private final Logger logger = LoggerFactory.getLogger(EncoderVideoBufferCallback.class);
 
     private final MMAL_POOL_T picturePool;
 
-    private boolean frameStarted = true;
+    private AtomicReference<VideoCaptureHandler> captureHandler = new AtomicReference();
 
-    private AtomicReference<PictureCaptureHandler> pictureCaptureHandler = new AtomicReference();
+    private ByteArrayOutputStream workingBuffer = new ByteArrayOutputStream();
 
-    EncoderBufferCallback(MMAL_POOL_T picturePool) {
+    private AtomicReference<ByteArrayOutputStream> readyBuffer = new AtomicReference<>(null);
+
+    private AtomicLong frameCounter = new AtomicLong(0);
+
+    EncoderVideoBufferCallback(MMAL_POOL_T picturePool) {
         this.picturePool = picturePool;
+
+        // create image buffers
+        workingBuffer = new ByteArrayOutputStream();
+        readyBuffer = new AtomicReference<>(null);
+
+        logger.info("EncoderVideoBufferCallback created {}", this);
     }
 
-    void setPictureCaptureHandler(PictureCaptureHandler pictureCaptureHandler) {
-        this.pictureCaptureHandler.set(pictureCaptureHandler);
-    }
-
-    void waitForCaptureToFinish(int captureTimeout) throws InterruptedException, CaptureTimeoutException {
-        captureFinishedSemaphore = new Semaphore(0);
-        if (captureTimeout >= 0) {
-            boolean acquired = captureFinishedSemaphore.tryAcquire(captureTimeout, TimeUnit.MILLISECONDS);
-            if (!acquired) {
-                throw new CaptureTimeoutException();
-            }
-        } else {
-            captureFinishedSemaphore.acquire();
-        }
+    private void flipBuffers() {
+        readyBuffer.set(workingBuffer);
+        workingBuffer = new ByteArrayOutputStream();
+        frameCounter.getAndIncrement();
     }
 
     @Override
@@ -95,29 +94,17 @@ class EncoderBufferCallback implements MMAL_PORT_BH_CB_T {
             logger.debug("flags={}", flags);
 
             if ( bufferLength > 0) {
-                byte[] data = buffer.data.getByteArray(buffer.offset, bufferLength);
-                PictureCaptureHandler handler = pictureCaptureHandler.get();
-                if (frameStarted) {
-                    if (handler != null) {
-                        handler.pictureData(data);
-                    } else {
-                        frameStarted = false;
-                    }
-                }
+                workingBuffer.write(buffer.data.getByteArray(buffer.offset, bufferLength));
             }
 
-            if (frameStarted && (flags & (MMAL_BUFFER_HEADER_FLAG_FRAME_END | MMAL_BUFFER_HEADER_FLAG_TRANSMISSION_FAILED)) != 0) {
-                finished = true;
-                frameStarted = false;
-                logger.info("set finished = true");
+            if ((flags & (MMAL_BUFFER_HEADER_FLAG_TRANSMISSION_FAILED)) != 0) {
+                logger.info("buffer transmission failed");
             } else
             if ((flags & MMAL_BUFFER_HEADER_FLAG_FRAME_END ) != 0) {
-                frameStarted = pictureCaptureHandler.get() != null;
-                logger.trace("set frameStarted = {}", frameStarted);
+                flipBuffers();
             }
         } catch (Exception e) {
             logger.error("Error in callback handling picture data", e);
-            finished = true;
         } finally {
             // Whatever happened, unlock the native buffer
             mmal_buffer_header_mem_unlock(pBuffer);
@@ -130,13 +117,6 @@ class EncoderBufferCallback implements MMAL_PORT_BH_CB_T {
 
         if (port.isEnabled()) {
             sendNextPictureBuffer(port);
-        }
-
-        logger.debug("finished={}", finished);
-
-        if (finished) {
-            logger.debug("signal capture complete");
-            captureFinishedSemaphore.release();
         }
     }
 
@@ -156,5 +136,17 @@ class EncoderBufferCallback implements MMAL_PORT_BH_CB_T {
         if (result != MMAL_SUCCESS) {
             throw new RuntimeException("Failed to send next picture buffer to encoder");
         }
+    }
+
+    public byte[] getData() {
+        if (readyBuffer.get() != null) {
+            return readyBuffer.get().toByteArray();
+        } else {
+            return null;
+        }
+    }
+
+    public long getFrameNumber() {
+        return frameCounter.get();
     }
 }

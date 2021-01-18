@@ -102,7 +102,7 @@ public final class CameraConfiguration {
 
     private Integer captureTimeout = -1;
 
-    private boolean useStills = false;
+    private boolean useVideoMode = true;
 
     //    private Integer imageEffectsParameters;
 
@@ -406,12 +406,12 @@ public final class CameraConfiguration {
         return captureTimeout;
     }
 
-    public boolean useStills() {
-        return useStills;
+    public boolean useVideoMode() {
+        return useVideoMode;
     }
 
-    public CameraConfiguration useStills(boolean useStills) {
-        this.useStills = useStills;
+    public CameraConfiguration useVideoMode(boolean useVideoMode) {
+        this.useVideoMode = useVideoMode;
         return this;
     }
 

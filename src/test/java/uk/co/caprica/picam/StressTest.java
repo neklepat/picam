@@ -23,6 +23,8 @@ import uk.co.caprica.picam.enums.AutomaticWhiteBalanceMode;
 import uk.co.caprica.picam.enums.Encoding;
 import uk.co.caprica.picam.enums.ExposureMeteringMode;
 import uk.co.caprica.picam.enums.ExposureMode;
+import uk.co.caprica.picam.handlers.ByteArrayPictureCaptureHandler;
+import uk.co.caprica.picam.handlers.PictureCaptureHandler;
 
 import static uk.co.caprica.picam.CameraConfiguration.cameraConfiguration;
 

@@ -17,51 +17,50 @@
  * Copyright 2016-2019 Caprica Software Limited.
  */
 
-package uk.co.caprica.picam;
+package uk.co.caprica.picam.handlers;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.BufferedOutputStream;
-import java.io.File;
-import java.io.FileOutputStream;
+import java.io.ByteArrayOutputStream;
 
-public class FilePictureCaptureHandler implements PictureCaptureHandler<File> {
+public class ByteArrayPictureCaptureHandler implements PictureCaptureHandler<byte[]> {
 
-    private final Logger logger = LoggerFactory.getLogger(FilePictureCaptureHandler.class);
+    private final Logger logger = LoggerFactory.getLogger(ByteArrayPictureCaptureHandler.class);
 
-    private final File file;
+    private final Integer initialSize;
 
-    private BufferedOutputStream out;
+    private ByteArrayOutputStream out;
 
-    public FilePictureCaptureHandler(File file) {
-        this.file = file;
+    public ByteArrayPictureCaptureHandler() {
+        this.initialSize = null;
+    }
+
+    public ByteArrayPictureCaptureHandler(int initialSize) {
+        this.initialSize = initialSize;
     }
 
     @Override
     public void begin() throws Exception {
-        logger.debug("begin()");
-        out = new BufferedOutputStream(new FileOutputStream(file));
+        logger.debug("Begin handler {}", this.hashCode());
+        out = initialSize != null ? new ByteArrayOutputStream(initialSize) : new ByteArrayOutputStream();
     }
 
     @Override
     public void pictureData(byte[] data) throws Exception {
-        logger.debug("pictureData(data=[{}])", data.length);
+        logger.debug("Writing picture data to {}", this.hashCode());
         out.write(data);
     }
 
     @Override
     public void end() throws Exception {
-        logger.debug("end()");
-        if (out != null) {
-            out.flush();
-            out.close();
-            out = null;
-        }
+        logger.debug("End handler {}", this.hashCode());
     }
 
     @Override
-    public File result() {
-        return file;
+    public byte[] result() {
+        logger.debug("Return handler {} result", this.hashCode());
+        return out.toByteArray();
     }
+
 }

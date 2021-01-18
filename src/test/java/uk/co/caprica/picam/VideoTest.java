@@ -22,8 +22,16 @@ package uk.co.caprica.picam;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import uk.co.caprica.picam.enums.Encoding;
+import uk.co.caprica.picam.handlers.BasicVideoCaptureHandler;
 import uk.co.caprica.picam.handlers.PictureCaptureHandler;
 import uk.co.caprica.picam.handlers.SequentialFilePictureCaptureHandler;
+import uk.co.caprica.picam.handlers.VideoCaptureHandler;
+
+import java.io.BufferedOutputStream;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.OutputStream;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static uk.co.caprica.picam.CameraConfiguration.cameraConfiguration;
 
@@ -36,16 +44,16 @@ import static uk.co.caprica.picam.CameraConfiguration.cameraConfiguration;
  *  820 x  616
  *  648 x  486
  */
-public class BasicTest {
+public class VideoTest {
 
-    private final Logger logger = LoggerFactory.getLogger(BasicTest.class);
+    private final Logger logger = LoggerFactory.getLogger(VideoTest.class);
 
     public static void main(String[] args) throws Exception {
-        new BasicTest(args);
+        new VideoTest(args);
     }
 
-    private BasicTest(String[] args) throws Exception {
-        logger.info("BasicTest()");
+    private VideoTest(String[] args) throws Exception {
+        logger.info("VideoTest()");
 
         if (args.length !=3) {
             System.err.println("Usage: <width> <height> <count>");
@@ -58,11 +66,13 @@ public class BasicTest {
         int max = Integer.parseInt(args[2]);
 
         CameraConfiguration config = cameraConfiguration()
-            .width(width)
-            .height(height)
-            .delay(5)
-            .encoding(Encoding.JPEG)
-            .quality(85)
+                .width(width)
+                .height(height)
+                .delay(5)
+                .encoding(Encoding.JPEG)
+                .fps(25)
+                .quality(85)
+                .useVideoMode(true)
 //            .brightness(50)
 //            .contrast(-30)
 //            .saturation(80)
@@ -82,18 +92,25 @@ public class BasicTest {
 //              .crop(0.25f, 0.25f, 0.5f, 0.5f);
                 ;
 
-        PictureCaptureHandler pictureCaptureHandler = new SequentialFilePictureCaptureHandler("image-%04d.jpg");
-
         try (Camera camera = new Camera(config)) {
             logger.info("created camera " + camera);
 
-            for (int i = 0; i < max; i++) {
-                System.out.println("Begin " + i);
-                camera.takePicture(pictureCaptureHandler);
-                System.out.println("  End " + i);
-            }
-        }
+            AtomicInteger counter = new AtomicInteger(0);
 
+            camera.capture((data, frameNumber) -> {
+                int i = counter.incrementAndGet();
+                logger.info("Begin " + i);
+                File file = new File(String.format("image-%04d.jpg", i));
+                try (OutputStream out = new FileOutputStream(file)) {
+                    out.write(data);
+                    out.flush();
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+                logger.info(" End " + i);
+                return i < max;
+            });
+        }
         logger.info("finished");
     }
 }

@@ -31,8 +31,13 @@ import uk.co.caprica.picam.bindings.internal.MMAL_PARAMETER_CAMERA_CONFIG_T;
 import uk.co.caprica.picam.bindings.internal.MMAL_POOL_T;
 import uk.co.caprica.picam.bindings.internal.MMAL_PORT_T;
 import uk.co.caprica.picam.bindings.internal.MMAL_VIDEO_FORMAT_T;
+import uk.co.caprica.picam.handlers.PictureCaptureHandler;
+import uk.co.caprica.picam.handlers.VideoCaptureHandler;
 
+import java.io.ByteArrayOutputStream;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static uk.co.caprica.picam.AlignUtils.alignUp;
 import static uk.co.caprica.picam.CameraParameterUtils.setAutomaticWhiteBalanceGains;
@@ -132,10 +137,11 @@ public final class Camera implements AutoCloseable {
 
     private MMAL_PORT_T cameraCapturePort;
 
-
     private Pointer cameraEncoderConnection;
 
     private EncoderBufferCallback encoderBufferCallback;
+
+    private EncoderVideoBufferCallback encoderVideoBufferCallback;
 
     public Camera(CameraConfiguration configuration) {
         logger.debug("Camera(configuration={})", configuration);
@@ -146,7 +152,11 @@ public final class Camera implements AutoCloseable {
         createCamera();
         connectCameraToEncoder();
         createPicturePool();
-        createEncoderBufferCallback();
+        if (configuration.useVideoMode()) {
+            createEncoderVideoBufferCallback();
+        } else {
+            createEncoderBufferCallback();
+        }
         enableEncoderOutput();
         sendBuffersToEncoder();
     }
@@ -187,6 +197,12 @@ public final class Camera implements AutoCloseable {
 
         if (encoderBufferCallback != null) {
             callbackThreadInitializer.detach(encoderBufferCallback);
+            encoderBufferCallback = null;
+        }
+
+        if (encoderVideoBufferCallback != null) {
+            callbackThreadInitializer.detach(encoderVideoBufferCallback);
+            encoderVideoBufferCallback = null;
         }
 
         disableEncoderOutputPort();
@@ -213,7 +229,7 @@ public final class Camera implements AutoCloseable {
 
         mmal_format_copy(encoderOutputPort.format, encoderInputPort.format);
 
-        encoderOutputPort.format.encoding = JPEG.value();//configuration.encoding().value();
+        encoderOutputPort.format.encoding = configuration.encoding().value();
         encoderOutputPort.buffer_size = Math.max(encoderOutputPort.buffer_size_recommended, encoderOutputPort.buffer_size_min);
         encoderOutputPort.buffer_num = Math.max(encoderOutputPort.buffer_num_recommended, encoderOutputPort.buffer_num_min);
         encoderOutputPort.write();
@@ -258,14 +274,9 @@ public final class Camera implements AutoCloseable {
         cameraCapturePort.read();
         cameraVideoPort = new MMAL_PORT_T(pOutputs[MMAL_CAMERA_VIDEO_PORT]);
         cameraVideoPort.read();
-//        cameraPreviewPort = new MMAL_PORT_T(pOutputs[MMAL_CAMERA_PREVIEW_PORT]);
-//        cameraPreviewPort.read();
-
 
         logger.trace("cameraCapturePort={}", cameraCapturePort);
         logger.trace("cameraVideoPort={}", cameraVideoPort);
-//        logger.trace("cameraPreviewPort={}", cameraPreviewPort);
-
 
         mmal_port_enable(cameraComponent.control, cameraControlCallback);
 
@@ -283,7 +294,7 @@ public final class Camera implements AutoCloseable {
         config.max_stills_w = configuration.width();
         config.max_stills_h = configuration.height();
         config.stills_yuv422 = 0;
-        config.one_shot_stills = configuration.useStills() ? 1 : 0;
+        config.one_shot_stills = configuration.useVideoMode() ? 0 : 1;
         // Preview configuration must be set to something reasonable, even though preview is not used
         config.max_preview_video_w = alignUp(configuration.width(), ALIGN_WIDTH);
         config.max_preview_video_h = alignUp(configuration.height(), ALIGN_HEIGHT);
@@ -338,7 +349,7 @@ public final class Camera implements AutoCloseable {
             }
         }
 
-        if (!configuration.useStills()) {
+        if (configuration.useVideoMode()) {
             logger.info("Configure video port");
             // Set the encode format on the video port
             cameraVideoPort.format.encoding_variant = I420.value();
@@ -400,10 +411,10 @@ public final class Camera implements AutoCloseable {
 
         PointerByReference pConnection = new PointerByReference();
 
-        if (configuration.useStills()) {
-            connectPorts(cameraCapturePort, encoderInputPort, pConnection);
-        } else {
+        if (configuration.useVideoMode()) {
             connectPorts(cameraVideoPort, encoderInputPort, pConnection);
+        } else {
+            connectPorts(cameraCapturePort, encoderInputPort, pConnection);
         }
 
         cameraEncoderConnection = pConnection.getValue();
@@ -419,10 +430,24 @@ public final class Camera implements AutoCloseable {
         Native.setCallbackThreadInitializer(encoderBufferCallback, callbackThreadInitializer);
     }
 
+    private void createEncoderVideoBufferCallback() {
+        if (encoderVideoBufferCallback == null) {
+            logger.debug("createEncoderVideoBufferCallback()");
+            encoderVideoBufferCallback = new EncoderVideoBufferCallback(picturePool);
+
+            Native.setCallbackThreadInitializer(encoderVideoBufferCallback, callbackThreadInitializer);
+        }
+    }
+
     private void enableEncoderOutput() {
         logger.debug("enableEncoderOutput()");
 
-        int result = mmal_port_enable(encoderOutputPort, encoderBufferCallback);
+        int result;
+        if (configuration.useVideoMode()) {
+            result = mmal_port_enable(encoderOutputPort, encoderVideoBufferCallback);
+        } else {
+            result = mmal_port_enable(encoderOutputPort, encoderBufferCallback);
+        }
         logger.debug("result={}", result);
 
         if (result != MMAL_SUCCESS) {
@@ -502,14 +527,64 @@ public final class Camera implements AutoCloseable {
         }
     }
 
+    private void processVideoCapture(VideoCaptureHandler handler) throws CaptureFailedException {
+        logger.debug("processVideoCapture()");
+
+        Integer delay = configuration.delay();
+        logger.debug("delay={}", delay);
+        if (delay != null && delay > 0) {
+            try {
+                Thread.sleep(delay);
+            }
+            catch (InterruptedException e) {
+                logger.error("Interrupted while waiting before capture", e);
+                throw new CaptureFailedException("Interrupted while waiting before capture", e);
+            }
+        }
+
+        startCapture();
+
+        boolean captureNext = true;
+
+        // send first frame immediately
+        long frameNumber = encoderVideoBufferCallback.getFrameNumber();
+        byte[] data = encoderVideoBufferCallback.getData();
+        if (data != null) {
+            captureNext = handler.frameReady(data, frameNumber);
+        }
+
+        long lastFrameTime = System.currentTimeMillis();
+        long lastFrame = encoderVideoBufferCallback.getFrameNumber();
+        while (captureNext) {
+
+            //throw an exception if camera freezes
+            if (configuration.captureTimeout() != null && (configuration.captureTimeout() > 0)
+                    && (System.currentTimeMillis() - lastFrameTime > configuration.captureTimeout())) {
+                throw new CaptureFailedException("Failed to obtain next image in given time");
+            }
+
+            // wait for next frame
+            if (lastFrame < encoderVideoBufferCallback.getFrameNumber()) {
+                lastFrameTime = System.currentTimeMillis();
+                lastFrame = encoderVideoBufferCallback.getFrameNumber();
+                captureNext = handler.frameReady(encoderVideoBufferCallback.getData(), lastFrame);
+            }
+
+            // have a nap
+            try {
+                Thread.sleep(5);
+            } catch (InterruptedException e) {}
+        }
+    }
+
     private void startCapture() throws CaptureFailedException {
         logger.debug("startCapture()");
 
         int result;
-        if (configuration.useStills()) {
-            result = mmal_port_parameter_set_boolean(cameraCapturePort, MMAL_PARAMETER_CAPTURE, 1);
-        } else {
+        if (configuration.useVideoMode()) {
             result = mmal_port_parameter_set_boolean(cameraVideoPort, MMAL_PARAMETER_CAPTURE, 1);
+        } else {
+            result = mmal_port_parameter_set_boolean(cameraCapturePort, MMAL_PARAMETER_CAPTURE, 1);
         }
 
         logger.debug("result={}", result);
@@ -525,5 +600,18 @@ public final class Camera implements AutoCloseable {
         logger.debug("disableEncoderOutputPort()");
 
         disablePort(encoderOutputPort);
+    }
+
+    public void capture(VideoCaptureHandler handler) throws Exception {
+        if (!configuration.useVideoMode()) {
+            throw new Exception("Capture method can be used in video mode only. Configure camera to useVideoMode(true)");
+        }
+
+        logger.info(">>> Begin capture video >>>");
+
+        processVideoCapture(handler);
+
+        logger.info("<<< End capture video <<<");
+
     }
 }

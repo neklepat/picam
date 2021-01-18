@@ -17,7 +17,7 @@
  * Copyright 2016-2019 Caprica Software Limited.
  */
 
-package uk.co.caprica.picam;
+package uk.co.caprica.picam.handlers;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
