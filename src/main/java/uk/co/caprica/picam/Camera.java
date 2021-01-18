@@ -70,12 +70,7 @@ import static uk.co.caprica.picam.MmalUtils.disableComponent;
 import static uk.co.caprica.picam.MmalUtils.disablePort;
 import static uk.co.caprica.picam.MmalUtils.enableComponent;
 import static uk.co.caprica.picam.MmalUtils.getPort;
-import static uk.co.caprica.picam.bindings.LibMmal.mmal_format_copy;
-import static uk.co.caprica.picam.bindings.LibMmal.mmal_port_enable;
-import static uk.co.caprica.picam.bindings.LibMmal.mmal_port_format_commit;
-import static uk.co.caprica.picam.bindings.LibMmal.mmal_port_send_buffer;
-import static uk.co.caprica.picam.bindings.LibMmal.mmal_queue_get;
-import static uk.co.caprica.picam.bindings.LibMmal.mmal_queue_length;
+import static uk.co.caprica.picam.bindings.LibMmal.*;
 import static uk.co.caprica.picam.bindings.LibMmalUtil.mmal_port_pool_create;
 import static uk.co.caprica.picam.bindings.LibMmalUtil.mmal_port_pool_destroy;
 import static uk.co.caprica.picam.bindings.MmalParameters.MMAL_PARAMETER_CAMERA_CUSTOM_SENSOR_CONFIG;
@@ -97,6 +92,8 @@ public final class Camera implements AutoCloseable {
 //    private static final String MMAL_COMPONENT_DEFAULT_IMAGE_ENCODER = "vc.ril.image_encode";
     private static final String MMAL_COMPONENT_DEFAULT_IMAGE_ENCODER = "vc.ril.image_encode";
 
+    private static final String MMAL_COMPONENT_DEFAULT_VIDEO_RENDERER = "vc.ril.video_render";
+
     private static final String MMAL_COMPONENT_DEFAULT_CAMERA = "vc.ril.camera";
 
     private static final int MMAL_CAMERA_PREVIEW_PORT = 0;
@@ -105,6 +102,10 @@ public final class Camera implements AutoCloseable {
 
     private static final int STILLS_FRAME_RATE_NUM = 5;
     private static final int STILLS_FRAME_RATE_DEN = 1;
+
+    // Frames rates of 0 implies variable, but denominator needs to be 1 to prevent div by 0
+    private static final int PREVIEW_FRAME_RATE_NUM = 0;
+    private static final int PREVIEW_FRAME_RATE_DEN = 1;
 
     private static final int VIDEO_OUTPUT_BUFFERS_NUM = 3;
 
@@ -130,8 +131,6 @@ public final class Camera implements AutoCloseable {
     private MMAL_POOL_T picturePool;
 
     private MMAL_COMPONENT_T cameraComponent;
-
-    private MMAL_PORT_T cameraPreviewPort;
 
     private MMAL_PORT_T cameraVideoPort;
 
@@ -260,7 +259,7 @@ public final class Camera implements AutoCloseable {
     }
 
     private void createCamera() {
-        logger.debug("createCamera()");
+        logger.info("createCamera(), WxH={}x{}", configuration.width(), configuration.height());
 
         cameraComponent = createComponent(MMAL_COMPONENT_DEFAULT_CAMERA);
 
@@ -274,7 +273,6 @@ public final class Camera implements AutoCloseable {
         cameraCapturePort.read();
         cameraVideoPort = new MMAL_PORT_T(pOutputs[MMAL_CAMERA_VIDEO_PORT]);
         cameraVideoPort.read();
-
         logger.trace("cameraCapturePort={}", cameraCapturePort);
         logger.trace("cameraVideoPort={}", cameraVideoPort);
 
@@ -296,8 +294,8 @@ public final class Camera implements AutoCloseable {
         config.stills_yuv422 = 0;
         config.one_shot_stills = configuration.useVideoMode() ? 0 : 1;
         // Preview configuration must be set to something reasonable, even though preview is not used
-        config.max_preview_video_w = alignUp(configuration.width(), ALIGN_WIDTH);
-        config.max_preview_video_h = alignUp(configuration.height(), ALIGN_HEIGHT);
+        config.max_preview_video_w = configuration.width();
+        config.max_preview_video_h = configuration.height();
         config.num_preview_video_frames = 3;
         config.stills_capture_circular_buffer_height = 0;
         config.fast_preview_resume = 0;
@@ -362,6 +360,9 @@ public final class Camera implements AutoCloseable {
             cameraVideoPort.format.es.video.crop.height = configuration.height();
             cameraVideoPort.format.es.video.frame_rate.num = configuration.fps();
             cameraVideoPort.format.es.video.frame_rate.den = 1;
+
+            cameraVideoPort.format.es.setType(MMAL_VIDEO_FORMAT_T.class);
+            cameraVideoPort.write();
 
             result = mmal_port_format_commit(cameraVideoPort);
             logger.info("cameraVideoPort commit result={}", result);
